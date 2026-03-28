@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { createServiceClient } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +16,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Industry required.' }, { status: 400 })
   }
 
+  const supabase = createServiceClient()
+
   // Fetch companies in this industry
   const { data: companies, error } = await supabase
     .from('companies')
@@ -24,6 +26,7 @@ export async function GET(req: NextRequest) {
     .eq('verified', true)
 
   if (error) {
+    console.error('Failed to fetch companies:', error)
     return NextResponse.json({ error: 'Failed to fetch companies.' }, { status: 500 })
   }
 
@@ -42,6 +45,7 @@ export async function GET(req: NextRequest) {
     .eq('voter_level', voterLevel)
 
   if (ratingsError) {
+    console.error('Failed to fetch ratings:', ratingsError)
     return NextResponse.json({ error: 'Failed to fetch ratings.' }, { status: 500 })
   }
 

@@ -33,25 +33,35 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
   const slug = industryToSlug(industry)
 
   useEffect(() => {
-    fetch(`/api/companies?industry=${encodeURIComponent(industry)}&industryScope=${industryScope}&voterLevel=global&page=1`)
-      .then((r) => r.json())
+    const base = `/api/companies?industry=${encodeURIComponent(industry)}&industryScope=${industryScope}&voterLevel=global`
+    fetch(`${base}&page=1`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`API error ${r.status}`)
+        return r.json()
+      })
       .then((data) => {
-        // Fetch all pages
-        const total = data.total
+        const total: number = data.total ?? 0
         const pages = Math.ceil(total / 25)
-        const promises = []
+        const promises: Promise<Company[]>[] = []
         for (let i = 2; i <= pages; i++) {
           promises.push(
-            fetch(`/api/companies?industry=${encodeURIComponent(industry)}&industryScope=${industryScope}&voterLevel=global&page=${i}`)
-              .then((r) => r.json())
-              .then((d) => d.companies)
+            fetch(`${base}&page=${i}`)
+              .then((r) => {
+                if (!r.ok) throw new Error(`API error ${r.status}`)
+                return r.json()
+              })
+              .then((d) => (d.companies ?? []) as Company[])
           )
         }
-        Promise.all(promises).then((results) => {
-          const all = [...data.companies, ...results.flat()]
+        return Promise.all(promises).then((results) => {
+          const all = [...(data.companies ?? []), ...results.flat()]
           setCompanies(all)
           setLoading(false)
         })
+      })
+      .catch((err) => {
+        console.error('Failed to load companies:', err)
+        setLoading(false)
       })
   }, [industry, industryScope])
 
