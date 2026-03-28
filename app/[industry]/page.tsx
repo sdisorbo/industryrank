@@ -22,9 +22,8 @@ export default function IndustryHub() {
   if (!industry) return null
 
   function handleStartVoting() {
-    // Clear any stored preferences so selector shows fresh
     const savedLevel = localStorage.getItem('voterLevel')
-    const savedInIndustry = localStorage.getItem('inIndustry')
+    const savedInIndustry = localStorage.getItem(`inIndustry_${slug}`)
     if (savedLevel && savedInIndustry !== null) {
       router.push(`/${slug}/vote`)
     } else {
@@ -34,7 +33,7 @@ export default function IndustryHub() {
 
   function handleLevelConfirm(voterLevel: string, industryScope: string) {
     localStorage.setItem('voterLevel', voterLevel)
-    localStorage.setItem('inIndustry', String(industryScope === 'in_industry'))
+    localStorage.setItem(`inIndustry_${slug}`, String(industryScope === 'in_industry'))
     setShowLevelSelector(false)
     router.push(`/${slug}/vote`)
   }
@@ -221,6 +220,7 @@ export default function IndustryHub() {
       {showLevelSelector && (
         <LevelSelector
           industryName={industry}
+          industrySlug={slug}
           onConfirm={handleLevelConfirm}
           onClose={() => setShowLevelSelector(false)}
         />
