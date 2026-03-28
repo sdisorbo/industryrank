@@ -29,6 +29,7 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
   const [voteCount, setVoteCount] = useState(0)
   const [showToast, setShowToast] = useState(false)
   const [voting, setVoting] = useState(false)
+  const [skipping, setSkipping] = useState(false)
   const slug = industryToSlug(industry)
 
   useEffect(() => {
@@ -94,7 +95,7 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
     if (voting) return
     setVoting(true)
 
-    await fetch('/api/vote', {
+    const res = await fetch('/api/vote', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -105,6 +106,13 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
         voterLevel,
       }),
     })
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      console.error('Vote failed', res.status, body)
+      setVoting(false)
+      return
+    }
 
     const newCount = voteCount + 1
     setVoteCount(newCount)
@@ -133,6 +141,25 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
     }
 
     setVoting(false)
+  }
+
+  function handleSkip() {
+    if (voting || skipping || !left || !right) return
+    setSkipping(true)
+
+    // Mark current pair as used so it won't immediately reappear
+    const skippedKey = [left.id, right.id].sort().join('|')
+    const nextPairs = new Set([...usedPairs, skippedKey])
+
+    // Pick fresh pair excluding both current cards
+    const excludeBoth = companies.filter((c) => c.id !== left.id && c.id !== right.id)
+    const pool = excludeBoth.length >= 2 ? excludeBoth : companies
+
+    const { c1, c2, pairKey } = pickPair(pool, null, nextPairs)
+    setUsedPairs(new Set([...nextPairs, pairKey]))
+    setLeft(c1)
+    setRight(c2)
+    setSkipping(false)
   }
 
   if (loading) {
@@ -229,19 +256,54 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
           />
         )}
 
-        {/* VS divider */}
+        {/* VS divider + skip */}
         <div
           style={{
             padding: '0 40px',
-            fontFamily: 'Inter, sans-serif',
-            fontSize: '11px',
-            fontWeight: 300,
-            letterSpacing: '0.4em',
-            color: '#222',
-            textTransform: 'uppercase',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '24px',
           }}
         >
-          VS
+          <span
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: '11px',
+              fontWeight: 300,
+              letterSpacing: '0.4em',
+              color: '#222',
+              textTransform: 'uppercase',
+            }}
+          >
+            VS
+          </span>
+          <button
+            onClick={handleSkip}
+            disabled={voting || skipping}
+            style={{
+              fontFamily: 'Inter, sans-serif',
+              fontSize: '10px',
+              fontWeight: 400,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: voting || skipping ? '#222' : '#444',
+              background: 'none',
+              border: '1px solid #1a1a1a',
+              padding: '6px 14px',
+              cursor: voting || skipping ? 'default' : 'pointer',
+              transition: '200ms ease',
+              whiteSpace: 'nowrap',
+            }}
+            onMouseEnter={(e) => {
+              if (!voting && !skipping) (e.currentTarget as HTMLButtonElement).style.color = '#888'
+            }}
+            onMouseLeave={(e) => {
+              ;(e.currentTarget as HTMLButtonElement).style.color = voting || skipping ? '#222' : '#444'
+            }}
+          >
+            New Pair
+          </button>
         </div>
 
         {/* Right card */}

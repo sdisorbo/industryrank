@@ -62,6 +62,10 @@ export default function RankingsTable({ industry }: RankingsTableProps) {
         setTotal(data.total ?? 0)
         setLoading(false)
       })
+      .catch((err) => {
+        console.error('Failed to load rankings:', err)
+        setLoading(false)
+      })
   }, [industry, scope, level, sortBy, page])
 
   useEffect(() => {

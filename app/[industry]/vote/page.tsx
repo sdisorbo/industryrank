@@ -22,20 +22,20 @@ export default function VotePage() {
       return
     }
     const savedLevel = localStorage.getItem('voterLevel')
-    const savedInIndustry = localStorage.getItem('inIndustry')
+    const savedInIndustry = localStorage.getItem(`inIndustry_${slug}`)
     if (savedLevel && savedInIndustry !== null) {
       setVoterLevel(savedLevel)
       setIndustryScope(savedInIndustry === 'true' ? 'in_industry' : 'all')
     } else {
       setShowSelector(true)
     }
-  }, [industry, router])
+  }, [industry, router, slug])
 
   if (!industry) return null
 
   function handleLevelConfirm(level: string, scope: string) {
     localStorage.setItem('voterLevel', level)
-    localStorage.setItem('inIndustry', String(scope === 'in_industry'))
+    localStorage.setItem(`inIndustry_${slug}`, String(scope === 'in_industry'))
     setVoterLevel(level)
     setIndustryScope(scope)
     setShowSelector(false)
@@ -45,6 +45,7 @@ export default function VotePage() {
     return (
       <LevelSelector
         industryName={industry}
+        industrySlug={slug}
         onConfirm={handleLevelConfirm}
         onClose={() => router.push(`/${slug}`)}
       />

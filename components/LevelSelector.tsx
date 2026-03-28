@@ -6,6 +6,7 @@ interface LevelSelectorProps {
   onConfirm: (voterLevel: string, industryScope: string) => void
   onClose: () => void
   industryName: string
+  industrySlug: string
 }
 
 const LEVELS = [
@@ -15,24 +16,27 @@ const LEVELS = [
   { id: 'senior', label: 'Senior+ (8+ yrs)' },
 ]
 
-export default function LevelSelector({ onConfirm, onClose, industryName }: LevelSelectorProps) {
+export default function LevelSelector({ onConfirm, onClose, industryName, industrySlug }: LevelSelectorProps) {
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null)
   const [inIndustry, setInIndustry] = useState<boolean | null>(null)
 
-  // Check localStorage for saved preferences
+  // Pre-fill saved global level; auto-confirm only if this industry's answer is also saved
   useEffect(() => {
     const savedLevel = localStorage.getItem('voterLevel')
-    const savedInIndustry = localStorage.getItem('inIndustry')
+    const savedInIndustry = localStorage.getItem(`inIndustry_${industrySlug}`)
+    if (savedLevel) setSelectedLevel(savedLevel)
     if (savedLevel && savedInIndustry !== null) {
+      // Both answered — skip the modal
       onConfirm(savedLevel, savedInIndustry === 'true' ? 'in_industry' : 'all')
     }
-  }, [onConfirm])
+  }, [onConfirm, industrySlug])
 
   function handleConfirm() {
     if (!selectedLevel || inIndustry === null) return
     const scope = inIndustry ? 'in_industry' : 'all'
+    // voterLevel is global; inIndustry is per-industry
     localStorage.setItem('voterLevel', selectedLevel)
-    localStorage.setItem('inIndustry', String(inIndustry))
+    localStorage.setItem(`inIndustry_${industrySlug}`, String(inIndustry))
     onConfirm(selectedLevel, scope)
   }
 

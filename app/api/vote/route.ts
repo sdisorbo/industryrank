@@ -43,44 +43,56 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Fetch all 4 rating rows in parallel
-  const [
-    { data: winnerRating },
-    { data: loserRating },
-    { data: winnerGlobal },
-    { data: loserGlobal },
-  ] = await Promise.all([
-    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', winnerId).eq('industry_scope', industryScope).eq('voter_level', voterLevel).maybeSingle(),
-    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', loserId).eq('industry_scope', industryScope).eq('voter_level', voterLevel).maybeSingle(),
-    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', winnerId).eq('industry_scope', industryScope).eq('voter_level', 'global').maybeSingle(),
-    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', loserId).eq('industry_scope', industryScope).eq('voter_level', 'global').maybeSingle(),
+  // Always update 'all' scope (aggregate). Also update in_industry scope if voter selected it.
+  const scopesToUpdate = industryScope === 'in_industry'
+    ? ['all', 'in_industry']
+    : ['all']
+
+  // Fetch rating rows for all scopes × [voterLevel, global] in parallel
+  const fetchPromises = scopesToUpdate.flatMap((scope) => [
+    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', winnerId).eq('industry_scope', scope).eq('voter_level', voterLevel).maybeSingle(),
+    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', loserId).eq('industry_scope', scope).eq('voter_level', voterLevel).maybeSingle(),
+    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', winnerId).eq('industry_scope', scope).eq('voter_level', 'global').maybeSingle(),
+    supabase.from('ratings').select('id, elo, wins, losses, total_votes').eq('company_id', loserId).eq('industry_scope', scope).eq('voter_level', 'global').maybeSingle(),
   ])
 
-  if (!winnerRating || !loserRating || !winnerGlobal || !loserGlobal) {
+  const fetchResults = await Promise.all(fetchPromises)
+
+  // Build update list
+  const now = new Date().toISOString()
+  const updates: Promise<{ error: unknown }>[] = []
+
+  for (let i = 0; i < scopesToUpdate.length; i++) {
+    const base = i * 4
+    const winnerRating = fetchResults[base].data
+    const loserRating  = fetchResults[base + 1].data
+    const winnerGlobal = fetchResults[base + 2].data
+    const loserGlobal  = fetchResults[base + 3].data
+
+    if (!winnerRating || !loserRating || !winnerGlobal || !loserGlobal) {
+      console.error('Rating rows not found for scope', scopesToUpdate[i], { winnerId, loserId, voterLevel })
+      continue
+    }
+
+    const { winner: newWElo, loser: newLElo } = newRatings(winnerRating.elo, loserRating.elo)
+    const { winner: newWGElo, loser: newLGElo } = newRatings(winnerGlobal.elo, loserGlobal.elo)
+
+    updates.push(
+      supabase.from('ratings').update({ elo: newWElo,  wins: winnerRating.wins + 1, total_votes: winnerRating.total_votes + 1, updated_at: now }).eq('id', winnerRating.id),
+      supabase.from('ratings').update({ elo: newLElo,  losses: loserRating.losses + 1, total_votes: loserRating.total_votes + 1, updated_at: now }).eq('id', loserRating.id),
+      supabase.from('ratings').update({ elo: newWGElo, wins: winnerGlobal.wins + 1, total_votes: winnerGlobal.total_votes + 1, updated_at: now }).eq('id', winnerGlobal.id),
+      supabase.from('ratings').update({ elo: newLGElo, losses: loserGlobal.losses + 1, total_votes: loserGlobal.total_votes + 1, updated_at: now }).eq('id', loserGlobal.id),
+    )
+  }
+
+  if (updates.length === 0) {
     return NextResponse.json({ error: 'Rating rows not found.' }, { status: 404 })
   }
 
-  // Compute new ELOs
-  const { winner: newWinnerElo, loser: newLoserElo } = newRatings(
-    winnerRating.elo,
-    loserRating.elo
-  )
-  const { winner: newWinnerGlobalElo, loser: newLoserGlobalElo } = newRatings(
-    winnerGlobal.elo,
-    loserGlobal.elo
-  )
-
-  // Run all 4 updates in parallel
-  const now = new Date().toISOString()
-  const [{ error: e1 }, { error: e2 }, { error: e3 }, { error: e4 }] = await Promise.all([
-    supabase.from('ratings').update({ elo: newWinnerElo, wins: winnerRating.wins + 1, total_votes: winnerRating.total_votes + 1, updated_at: now }).eq('id', winnerRating.id),
-    supabase.from('ratings').update({ elo: newLoserElo, losses: loserRating.losses + 1, total_votes: loserRating.total_votes + 1, updated_at: now }).eq('id', loserRating.id),
-    supabase.from('ratings').update({ elo: newWinnerGlobalElo, wins: winnerGlobal.wins + 1, total_votes: winnerGlobal.total_votes + 1, updated_at: now }).eq('id', winnerGlobal.id),
-    supabase.from('ratings').update({ elo: newLoserGlobalElo, losses: loserGlobal.losses + 1, total_votes: loserGlobal.total_votes + 1, updated_at: now }).eq('id', loserGlobal.id),
-  ])
-
-  if (e1 || e2 || e3 || e4) {
-    console.error('Rating update errors:', { e1, e2, e3, e4 })
+  const updateResults = await Promise.all(updates)
+  const hasError = updateResults.some((r) => (r as { error: unknown }).error)
+  if (hasError) {
+    console.error('Rating update errors:', updateResults.map((r) => (r as { error: unknown }).error))
     return NextResponse.json({ error: 'Failed to update ratings.' }, { status: 500 })
   }
 
