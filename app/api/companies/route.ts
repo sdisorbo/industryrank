@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,8 +15,6 @@ export async function GET(req: NextRequest) {
   if (!industry) {
     return NextResponse.json({ error: 'Industry required.' }, { status: 400 })
   }
-
-  const supabase = createServiceClient()
 
   // Fetch companies in this industry
   const { data: companies, error } = await supabase
