@@ -58,10 +58,8 @@ export async function POST(req: NextRequest) {
 
   const fetchResults = await Promise.all(fetchPromises)
 
-  // Build update list
   const now = new Date().toISOString()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updates: Promise<{ error: any }>[] = []
+  let anyUpdated = false
 
   for (let i = 0; i < scopesToUpdate.length; i++) {
     const base = i * 4
@@ -78,23 +76,23 @@ export async function POST(req: NextRequest) {
     const { winner: newWElo, loser: newLElo } = newRatings(winnerRating.elo, loserRating.elo)
     const { winner: newWGElo, loser: newLGElo } = newRatings(winnerGlobal.elo, loserGlobal.elo)
 
-    updates.push(
-      supabase.from('ratings').update({ elo: newWElo,  wins: winnerRating.wins + 1, total_votes: winnerRating.total_votes + 1, updated_at: now }).eq('id', winnerRating.id).then(r => r),
-      supabase.from('ratings').update({ elo: newLElo,  losses: loserRating.losses + 1, total_votes: loserRating.total_votes + 1, updated_at: now }).eq('id', loserRating.id).then(r => r),
-      supabase.from('ratings').update({ elo: newWGElo, wins: winnerGlobal.wins + 1, total_votes: winnerGlobal.total_votes + 1, updated_at: now }).eq('id', winnerGlobal.id).then(r => r),
-      supabase.from('ratings').update({ elo: newLGElo, losses: loserGlobal.losses + 1, total_votes: loserGlobal.total_votes + 1, updated_at: now }).eq('id', loserGlobal.id).then(r => r),
-    )
+    const [r1, r2, r3, r4] = await Promise.all([
+      supabase.from('ratings').update({ elo: newWElo,  wins: winnerRating.wins + 1, total_votes: winnerRating.total_votes + 1, updated_at: now }).eq('id', winnerRating.id),
+      supabase.from('ratings').update({ elo: newLElo,  losses: loserRating.losses + 1, total_votes: loserRating.total_votes + 1, updated_at: now }).eq('id', loserRating.id),
+      supabase.from('ratings').update({ elo: newWGElo, wins: winnerGlobal.wins + 1, total_votes: winnerGlobal.total_votes + 1, updated_at: now }).eq('id', winnerGlobal.id),
+      supabase.from('ratings').update({ elo: newLGElo, losses: loserGlobal.losses + 1, total_votes: loserGlobal.total_votes + 1, updated_at: now }).eq('id', loserGlobal.id),
+    ])
+
+    if (r1.error || r2.error || r3.error || r4.error) {
+      console.error('Rating update errors:', r1.error, r2.error, r3.error, r4.error)
+      return NextResponse.json({ error: 'Failed to update ratings.' }, { status: 500 })
+    }
+
+    anyUpdated = true
   }
 
-  if (updates.length === 0) {
+  if (!anyUpdated) {
     return NextResponse.json({ error: 'Rating rows not found.' }, { status: 404 })
-  }
-
-  const updateResults = await Promise.all(updates)
-  const hasError = updateResults.some((r) => r.error)
-  if (hasError) {
-    console.error('Rating update errors:', updateResults.map((r) => r.error))
-    return NextResponse.json({ error: 'Failed to update ratings.' }, { status: 500 })
   }
 
   // Update vote limit counter
