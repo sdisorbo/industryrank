@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import CompanyCard from './CompanyCard'
@@ -11,6 +11,7 @@ interface Company {
   name: string
   domain: string
   industry: string
+  elo: number
 }
 
 interface VotingArenaProps {
@@ -19,19 +20,58 @@ interface VotingArenaProps {
   industryScope: string
 }
 
+/**
+ * Weighted random pick from `pool`, biased toward companies whose ELO is
+ * close to `anchorElo`.  Companies already in `seenIds` are skipped unless
+ * the entire pool has been seen (then we reset for that company).
+ */
+function pickWeightedOpponent(
+  anchorElo: number,
+  pool: Company[],
+  seenIds: Set<string>
+): Company {
+  let candidates = pool.filter((c) => !seenIds.has(c.id))
+  if (candidates.length === 0) candidates = pool // all seen → reset
+
+  // Gaussian weight centred on anchorElo; σ = 300 ELO points
+  const sigma = 300
+  const weights = candidates.map((c) => {
+    const diff = c.elo - anchorElo
+    return Math.exp(-(diff * diff) / (2 * sigma * sigma))
+  })
+
+  let rand = Math.random() * weights.reduce((a, b) => a + b, 0)
+  for (let i = 0; i < candidates.length; i++) {
+    rand -= weights[i]
+    if (rand <= 0) return candidates[i]
+  }
+  return candidates[candidates.length - 1]
+}
+
 export default function VotingArena({ industry, voterLevel, industryScope }: VotingArenaProps) {
   const router = useRouter()
   const [companies, setCompanies] = useState<Company[]>([])
   const [left, setLeft] = useState<Company | null>(null)
   const [right, setRight] = useState<Company | null>(null)
-  const [usedPairs, setUsedPairs] = useState<Set<string>>(new Set())
+  // Per-company seen opponents: companyId → Set of opponent IDs already faced
+  const [seenOpponents, setSeenOpponents] = useState<Map<string, Set<string>>>(new Map())
   const [loading, setLoading] = useState(true)
   const [voteCount, setVoteCount] = useState(0)
   const [showToast, setShowToast] = useState(false)
   const [voting, setVoting] = useState(false)
   const [skipping, setSkipping] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   const slug = industryToSlug(industry)
 
+  // Mobile detection
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+
+  // Fetch all companies (all pages)
   useEffect(() => {
     const base = `/api/companies?industry=${encodeURIComponent(industry)}&industryScope=${industryScope}&voterLevel=global`
     fetch(`${base}&page=1`)
@@ -54,7 +94,7 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
           )
         }
         return Promise.all(promises).then((results) => {
-          const all = [...(data.companies ?? []), ...results.flat()]
+          const all = [...(data.companies ?? []), ...results.flat()] as Company[]
           setCompanies(all)
           setLoading(false)
         })
@@ -65,40 +105,20 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
       })
   }, [industry, industryScope])
 
-  const pickPair = useCallback(
-    (pool: Company[], exclude: Company | null, pairs: Set<string>) => {
-      const available = exclude ? pool.filter((c) => c.id !== exclude.id) : pool
-
-      for (let attempt = 0; attempt < 50; attempt++) {
-        const idx1 = Math.floor(Math.random() * available.length)
-        const idx2 = Math.floor(Math.random() * available.length)
-        if (idx1 === idx2) continue
-
-        const c1 = available[idx1]
-        const c2 = available[idx2]
-        const pairKey = [c1.id, c2.id].sort().join('|')
-        if (!pairs.has(pairKey)) return { c1, c2, pairKey }
-      }
-
-      // If all pairs used, reset
-      const idx1 = Math.floor(Math.random() * available.length)
-      let idx2 = Math.floor(Math.random() * available.length)
-      while (idx2 === idx1) idx2 = Math.floor(Math.random() * available.length)
-      const c1 = available[idx1]
-      const c2 = available[idx2]
-      const pairKey = [c1.id, c2.id].sort().join('|')
-      return { c1, c2, pairKey }
-    },
-    []
-  )
-
+  // Pick initial pair once companies are loaded
   useEffect(() => {
-    if (companies.length >= 2) {
-      const { c1, c2, pairKey } = pickPair(companies, null, usedPairs)
-      setLeft(c1)
-      setRight(c2)
-      setUsedPairs((prev) => new Set([...prev, pairKey]))
-    }
+    if (companies.length < 2) return
+    const idx = Math.floor(Math.random() * companies.length)
+    const c1 = companies[idx]
+    const pool2 = companies.filter((c) => c.id !== c1.id)
+    const c2 = pickWeightedOpponent(c1.elo, pool2, new Set())
+
+    const initSeen = new Map<string, Set<string>>()
+    initSeen.set(c1.id, new Set([c2.id]))
+    initSeen.set(c2.id, new Set([c1.id]))
+    setSeenOpponents(initSeen)
+    setLeft(c1)
+    setRight(c2)
   }, [companies]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleVote(winner: Company, loser: Company) {
@@ -108,47 +128,39 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
     const res = await fetch('/api/vote', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        winnerId: winner.id,
-        loserId: loser.id,
-        industry,
-        industryScope,
-        voterLevel,
-      }),
+      body: JSON.stringify({ winnerId: winner.id, loserId: loser.id, industry, industryScope, voterLevel }),
     })
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      console.error('Vote failed', res.status, body)
+      console.error('Vote failed', res.status, await res.json().catch(() => ({})))
       setVoting(false)
       return
     }
 
     const newCount = voteCount + 1
     setVoteCount(newCount)
-
     if (newCount % 10 === 0) {
       setShowToast(true)
       setTimeout(() => setShowToast(false), 3000)
     }
 
-    // Winner stays (the clicked one), replace the loser
-    const isLeftWinner = winner.id === left?.id
+    // Update seen-opponent sets (compute first, then set state)
+    const winnerSeen = new Set([...(seenOpponents.get(winner.id) ?? []), loser.id])
+    const loserSeen  = new Set([...(seenOpponents.get(loser.id)  ?? []), winner.id])
+    const nextSeen   = new Map(seenOpponents)
+    nextSeen.set(winner.id, winnerSeen)
+    nextSeen.set(loser.id, loserSeen)
+    setSeenOpponents(nextSeen)
 
-    const nextPool = isLeftWinner
-      ? companies.filter((c) => c.id !== left?.id)
-      : companies.filter((c) => c.id !== right?.id)
+    // Winner stays; pick weighted opponent for winner
+    const pool     = companies.filter((c) => c.id !== winner.id)
+    const newCard  = pickWeightedOpponent(winner.elo, pool, winnerSeen)
+    // Track new card as seen by winner
+    nextSeen.set(winner.id, new Set([...winnerSeen, newCard.id]))
+    setSeenOpponents(new Map(nextSeen))
 
-    const stayingCard = isLeftWinner ? left! : right!
-    const { c1: newCard, pairKey } = pickPair(nextPool, stayingCard, usedPairs)
-
-    setUsedPairs((prev) => new Set([...prev, pairKey]))
-
-    if (isLeftWinner) {
-      setRight(newCard)
-    } else {
-      setLeft(newCard)
-    }
+    if (winner.id === left?.id) setRight(newCard)
+    else setLeft(newCard)
 
     setVoting(false)
   }
@@ -157,16 +169,21 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
     if (voting || skipping || !left || !right) return
     setSkipping(true)
 
-    // Mark current pair as used so it won't immediately reappear
-    const skippedKey = [left.id, right.id].sort().join('|')
-    const nextPairs = new Set([...usedPairs, skippedKey])
+    // Mark current pair as mutually seen
+    const nextSeen = new Map(seenOpponents)
+    nextSeen.set(left.id,  new Set([...(nextSeen.get(left.id)  ?? []), right.id]))
+    nextSeen.set(right.id, new Set([...(nextSeen.get(right.id) ?? []), left.id]))
 
-    // Pick fresh pair excluding both current cards
-    const excludeBoth = companies.filter((c) => c.id !== left.id && c.id !== right.id)
-    const pool = excludeBoth.length >= 2 ? excludeBoth : companies
+    // Fresh random anchor, weighted opponent
+    const idx = Math.floor(Math.random() * companies.length)
+    const c1  = companies[idx]
+    const pool2 = companies.filter((c) => c.id !== c1.id)
+    const c1Seen = new Set([...(nextSeen.get(c1.id) ?? []), left.id, right.id])
+    const c2 = pickWeightedOpponent(c1.elo, pool2, c1Seen)
 
-    const { c1, c2, pairKey } = pickPair(pool, null, nextPairs)
-    setUsedPairs(new Set([...nextPairs, pairKey]))
+    nextSeen.set(c1.id, new Set([...c1Seen, c2.id]))
+    nextSeen.set(c2.id, new Set([...(nextSeen.get(c2.id) ?? []), c1.id]))
+    setSeenOpponents(nextSeen)
     setLeft(c1)
     setRight(c2)
     setSkipping(false)
@@ -198,7 +215,7 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
       <div
         style={{
           borderBottom: '1px solid #1a1a1a',
-          padding: '16px 32px',
+          padding: isMobile ? '12px 16px' : '16px 32px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -250,30 +267,44 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
 
       {/* Voting area */}
       <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr auto 1fr',
-          alignItems: 'center',
-          minHeight: 'calc(100vh - 56px - 57px)',
-        }}
+        style={
+          isMobile
+            ? {
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'stretch',
+                minHeight: 'calc(100vh - 56px - 49px)',
+              }
+            : {
+                display: 'grid',
+                gridTemplateColumns: '1fr auto 1fr',
+                alignItems: 'center',
+                minHeight: 'calc(100vh - 56px - 57px)',
+              }
+        }
       >
-        {/* Left card */}
+        {/* Left / Top card */}
         {left && (
           <VoteCard
             company={left}
             onClick={() => handleVote(left, right!)}
             disabled={voting}
+            isMobile={isMobile}
           />
         )}
 
-        {/* VS divider + skip */}
+        {/* VS + New Pair */}
         <div
           style={{
-            padding: '0 40px',
+            padding: isMobile ? '0' : '0 40px',
             display: 'flex',
-            flexDirection: 'column',
+            flexDirection: isMobile ? 'row' : 'column',
             alignItems: 'center',
-            gap: '24px',
+            justifyContent: 'center',
+            gap: isMobile ? '20px' : '24px',
+            borderTop:    isMobile ? '1px solid #111' : 'none',
+            borderBottom: isMobile ? '1px solid #111' : 'none',
+            padding:      isMobile ? '14px 24px' : '0 40px',
           }}
         >
           <span
@@ -316,12 +347,13 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
           </button>
         </div>
 
-        {/* Right card */}
+        {/* Right / Bottom card */}
         {right && (
           <VoteCard
             company={right}
             onClick={() => handleVote(right, left!)}
             disabled={voting}
+            isMobile={isMobile}
           />
         )}
       </div>
@@ -358,10 +390,12 @@ function VoteCard({
   company,
   onClick,
   disabled,
+  isMobile,
 }: {
   company: Company
   onClick: () => void
   disabled: boolean
+  isMobile: boolean
 }) {
   const [hovered, setHovered] = useState(false)
 
@@ -376,21 +410,22 @@ function VoteCard({
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: '32px',
-        padding: '80px 40px',
+        gap: isMobile ? '20px' : '32px',
+        padding: isMobile ? '40px 24px' : '80px 40px',
         background: hovered ? '#1c1c1c' : 'transparent',
         border: 'none',
         cursor: disabled ? 'default' : 'pointer',
         transition: '200ms ease',
-        height: '100%',
+        height: isMobile ? undefined : '100%',
         width: '100%',
+        minHeight: isMobile ? '220px' : undefined,
       }}
     >
       <CompanyCard
         name={company.name}
         domain={company.domain}
         industry={company.industry}
-        size={120}
+        size={isMobile ? 80 : 120}
         showLabel={true}
       />
     </button>
