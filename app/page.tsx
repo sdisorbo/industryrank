@@ -39,7 +39,7 @@ export default function Home() {
             marginTop: '24px',
           }}
         >
-          The market decides.
+          Industry rankings, anonymously curated.
         </p>
       </div>
 

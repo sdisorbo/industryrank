@@ -12,7 +12,7 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: 'IndustryRank',
-  description: 'The market decides.',
+  description: 'Industry rankings, anonymously curated.',
 }
 
 export default function RootLayout({
