@@ -296,7 +296,6 @@ export default function VotingArena({ industry, voterLevel, industryScope }: Vot
         {/* VS + New Pair */}
         <div
           style={{
-            padding: isMobile ? '0' : '0 40px',
             display: 'flex',
             flexDirection: isMobile ? 'row' : 'column',
             alignItems: 'center',
